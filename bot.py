@@ -1,6 +1,10 @@
 import os
-import sqlite3
 import calendar
+import httpx
+import base64
+import json
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from datetime import datetime, date
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -9,25 +13,29 @@ from telegram.ext import (
 )
 
 TOKEN = os.getenv("BOT_TOKEN", "8615039614:AAHE9gpAoX5uOgPCbfob9pepmKsw1rQjIIo")
-DB_PATH = "journal.db"
+CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 # Conversation states
 (PAIR, DIRECTION, ENTRY, EXIT, LOT, RESULT, COMMENT) = range(7)
 
 # ─── DATABASE ───────────────────────────────────────────────────────────────
 
+def get_conn():
+    return psycopg2.connect(DATABASE_URL)
+
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     c = conn.cursor()
     c.execute("""
         CREATE TABLE IF NOT EXISTS trades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT,
             date TEXT,
             pair TEXT,
             direction TEXT,
             entry REAL,
-            exit REAL,
+            exit_price REAL,
             lot REAL,
             result REAL,
             comment TEXT
@@ -37,55 +45,116 @@ def init_db():
     conn.close()
 
 def add_trade(user_id, pair, direction, entry, exit_price, lot, result, comment):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     c = conn.cursor()
     c.execute("""
-        INSERT INTO trades (user_id, date, pair, direction, entry, exit, lot, result, comment)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO trades (user_id, date, pair, direction, entry, exit_price, lot, result, comment)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (user_id, date.today().isoformat(), pair, direction, entry, exit_price, lot, result, comment))
     conn.commit()
     conn.close()
 
 def get_trades(user_id, filter_date=None):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     c = conn.cursor()
     if filter_date:
-        c.execute("SELECT * FROM trades WHERE user_id=? AND date=? ORDER BY id DESC", (user_id, filter_date))
+        c.execute("SELECT id,user_id,date,pair,direction,entry,exit_price,lot,result,comment FROM trades WHERE user_id=%s AND date=%s ORDER BY id DESC", (user_id, filter_date))
     else:
-        c.execute("SELECT * FROM trades WHERE user_id=? ORDER BY id DESC", (user_id,))
+        c.execute("SELECT id,user_id,date,pair,direction,entry,exit_price,lot,result,comment FROM trades WHERE user_id=%s ORDER BY id DESC", (user_id,))
     rows = c.fetchall()
     conn.close()
     return rows
 
 def get_stats(user_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("SELECT result, pair, direction FROM trades WHERE user_id=?", (user_id,))
+    c.execute("SELECT result, pair, direction FROM trades WHERE user_id=%s", (user_id,))
     rows = c.fetchall()
     conn.close()
     return rows
 
 def get_trade_dates(user_id, year, month):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     c = conn.cursor()
     prefix = f"{year}-{month:02d}"
-    c.execute("SELECT DISTINCT date FROM trades WHERE user_id=? AND date LIKE ?", (user_id, f"{prefix}%"))
+    c.execute("SELECT DISTINCT date FROM trades WHERE user_id=%s AND date LIKE %s", (user_id, f"{prefix}%"))
     rows = [r[0] for r in c.fetchall()]
     conn.close()
     return rows
 
 def delete_trade(trade_id, user_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     c = conn.cursor()
-    c.execute("DELETE FROM trades WHERE id=? AND user_id=?", (trade_id, user_id))
+    c.execute("DELETE FROM trades WHERE id=%s AND user_id=%s", (trade_id, user_id))
     conn.commit()
     conn.close()
+
+# ─── CLAUDE VISION ──────────────────────────────────────────────────────────
+
+async def analyze_mt5_screenshot(image_bytes: bytes) -> dict | None:
+    """Send MT5 screenshot to Claude and extract trade data."""
+    if not CLAUDE_API_KEY:
+        return None
+    
+    b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+    
+    payload = {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1000,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": b64}
+                },
+                {
+                    "type": "text",
+                    "text": """This is a MetaTrader 5 trade screenshot. Extract the trade data and return ONLY a JSON object with these fields:
+{
+  "pair": "symbol name e.g. XAUUSD",
+  "direction": "Long or Short",
+  "lot": 0.08,
+  "entry": 4614.38,
+  "exit": 4572.70,
+  "result": 333.44,
+  "date": "YYYY-MM-DD"
+}
+Rules:
+- direction: if you see "sell" or "short" → "Short", if "buy" or "long" → "Long"
+- result: always positive number, determine profit/loss from context
+- If any field is missing, use null
+Return ONLY the JSON, no other text."""
+                }
+            ]
+        }]
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": CLAUDE_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json"
+                },
+                json=payload
+            )
+        data = resp.json()
+        text = data["content"][0]["text"].strip()
+        text = text.replace("```json", "").replace("```", "").strip()
+        return json.loads(text)
+    except Exception as e:
+        print(f"Vision error: {e}")
+        return None
 
 # ─── MAIN MENU ───────────────────────────────────────────────────────────────
 
 def main_menu_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Добавить сделку", callback_data="add")],
+        [InlineKeyboardButton("📸 Скрин MT5", callback_data="screenshot"),
+         InlineKeyboardButton("➕ Вручную", callback_data="add")],
         [InlineKeyboardButton("📊 Статистика", callback_data="stats"),
          InlineKeyboardButton("📅 Календарь", callback_data="calendar")],
         [InlineKeyboardButton("📋 История сделок", callback_data="history")],
@@ -93,7 +162,7 @@ def main_menu_keyboard():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 *Торговый журнал*\n\nВыбери действие:",
+        "👋 *Торговый журнал*\n\n📸 Скинь скрин из MT5 — бот сам заполнит сделку\n✏️ Или добавь вручную:",
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard()
     )
@@ -103,6 +172,98 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     await query.edit_message_text(
         "📊 *Главное меню*\n\nВыбери действие:",
+        parse_mode="Markdown",
+        reply_markup=main_menu_keyboard()
+    )
+
+async def screenshot_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "📸 *Распознавание MT5*\n\nОтправь скриншот сделки из MT5 — бот автоматически заполнит все поля.",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="menu")]])
+    )
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle incoming photo — try to parse as MT5 screenshot."""
+    if not CLAUDE_API_KEY:
+        await update.message.reply_text(
+            "⚠️ Claude API key не настроен. Добавь CLAUDE_API_KEY в переменные Railway.",
+            reply_markup=main_menu_keyboard()
+        )
+        return
+
+    msg = await update.message.reply_text("🔍 Анализирую скриншот...")
+
+    photo = update.message.photo[-1]
+    file = await context.bot.get_file(photo.file_id)
+    image_bytes = await file.download_as_bytearray()
+
+    trade = await analyze_mt5_screenshot(bytes(image_bytes))
+
+    if not trade or trade.get("pair") is None:
+        await msg.edit_text(
+            "❌ Не удалось распознать сделку. Попробуй другой скрин или добавь вручную.",
+            reply_markup=main_menu_keyboard()
+        )
+        return
+
+    direction = trade.get("direction", "—")
+    pair = trade.get("pair", "—")
+    entry = trade.get("entry")
+    exit_p = trade.get("exit")
+    lot = trade.get("lot")
+    result = trade.get("result")
+    trade_date = trade.get("date") or date.today().isoformat()
+
+    dir_emoji = "📈" if direction == "Long" else "📉"
+    res_emoji = "✅" if (result or 0) > 0 else "❌"
+
+    context.user_data["screenshot_trade"] = trade
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Сохранить", callback_data="confirm_screenshot"),
+         InlineKeyboardButton("✏️ Изменить", callback_data="add")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="menu")]
+    ])
+
+    await msg.edit_text(
+        f"🔍 *Распознано из MT5:*\n\n"
+        f"📌 Пара: *{pair}* | {dir_emoji} {direction}\n"
+        f"📦 Лот: {lot}\n"
+        f"🔵 Вход: {entry} → 🔴 Выход: {exit_p}\n"
+        f"{res_emoji} Результат: {'+'if (result or 0)>0 else ''}{result}$\n"
+        f"📅 Дата: {trade_date}\n\n"
+        f"Всё верно?",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+
+async def confirm_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    t = context.user_data.get("screenshot_trade", {})
+
+    trade_date = t.get("date") or date.today().isoformat()
+    result = t.get("result", 0)
+    direction = t.get("direction", "Long")
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO trades (user_id, date, pair, direction, entry, exit, lot, result, comment)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (uid, trade_date, t.get("pair",""), direction,
+          t.get("entry", 0), t.get("exit", 0), t.get("lot", 0), result, "📸 MT5"))
+    conn.commit()
+    conn.close()
+
+    res_emoji = "✅" if result > 0 else "❌"
+    await query.edit_message_text(
+        f"{res_emoji} *Сделка сохранена!*\n\n"
+        f"📌 {t.get('pair')} | {direction} | {'+'if result>0 else ''}{result}$",
         parse_mode="Markdown",
         reply_markup=main_menu_keyboard()
     )
@@ -475,11 +636,14 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(menu, pattern="^menu$"))
+    app.add_handler(CallbackQueryHandler(screenshot_prompt, pattern="^screenshot$"))
+    app.add_handler(CallbackQueryHandler(confirm_screenshot, pattern="^confirm_screenshot$"))
     app.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
     app.add_handler(CallbackQueryHandler(show_calendar, pattern="^calendar$"))
     app.add_handler(CallbackQueryHandler(calendar_nav, pattern="^cal_"))
     app.add_handler(CallbackQueryHandler(show_day, pattern="^day_"))
     app.add_handler(CallbackQueryHandler(show_history, pattern="^history$"))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Regex(r"^/delete_\d+$"), delete_trade_cmd))
 
     print("Бот запущен...")
