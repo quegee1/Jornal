@@ -13,7 +13,7 @@ from telegram.ext import (
 )
 
 TOKEN = os.getenv("BOT_TOKEN", "8615039614:AAHE9gpAoX5uOgPCbfob9pepmKsw1rQjIIo")
-CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 # Conversation states
@@ -89,64 +89,37 @@ def delete_trade(trade_id, user_id):
     conn.commit()
     conn.close()
 
-# ─── CLAUDE VISION ──────────────────────────────────────────────────────────
+# ─── GEMINI VISION ──────────────────────────────────────────────────────────
 
 async def analyze_mt5_screenshot(image_bytes: bytes) -> dict | None:
-    """Send MT5 screenshot to Claude and extract trade data."""
-    if not CLAUDE_API_KEY:
+    if not GEMINI_API_KEY:
         return None
-    
-    b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
-    
+    b64 = __import__("base64").standard_b64encode(image_bytes).decode("utf-8")
+    prompt = (
+        "This is a MetaTrader 5 trade screenshot. "
+        "Return ONLY a JSON object with these fields: "
+        "pair, direction (Long or Short), lot, entry, exit, result, date (YYYY-MM-DD). "
+        "Rules: sell=Short buy=Long. result is always a number. No extra text."
+    )
     payload = {
-        "model": "claude-sonnet-4-20250514",
-        "max_tokens": 1000,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": "image/png", "data": b64}
-                },
-                {
-                    "type": "text",
-                    "text": """This is a MetaTrader 5 trade screenshot. Extract the trade data and return ONLY a JSON object with these fields:
-{
-  "pair": "symbol name e.g. XAUUSD",
-  "direction": "Long or Short",
-  "lot": 0.08,
-  "entry": 4614.38,
-  "exit": 4572.70,
-  "result": 333.44,
-  "date": "YYYY-MM-DD"
-}
-Rules:
-- direction: if you see "sell" or "short" → "Short", if "buy" or "long" → "Long"
-- result: always positive number, determine profit/loss from context
-- If any field is missing, use null
-Return ONLY the JSON, no other text."""
-                }
-            ]
-        }]
+        "contents": [{"parts": [
+            {"inline_data": {"mime_type": "image/png", "data": b64}},
+            {"text": prompt}
+        ]}]
     }
-    
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": CLAUDE_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json"
-                },
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}",
+                headers={"content-type": "application/json"},
                 json=payload
             )
         data = resp.json()
-        text = data["content"][0]["text"].strip()
+        text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
         text = text.replace("```json", "").replace("```", "").strip()
-        return json.loads(text)
+        return __import__("json").loads(text)
     except Exception as e:
-        print(f"Vision error: {e}")
+        print(f"Gemini Vision error: {e}")
         return None
 
 # ─── MAIN MENU ───────────────────────────────────────────────────────────────
@@ -187,9 +160,9 @@ async def screenshot_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming photo — try to parse as MT5 screenshot."""
-    if not CLAUDE_API_KEY:
+    if not GEMINI_API_KEY:
         await update.message.reply_text(
-            "⚠️ Claude API key не настроен. Добавь CLAUDE_API_KEY в переменные Railway.",
+            "⚠️ Gemini API key не настроен. Добавь GEMINI_API_KEY в переменные Railway.",
             reply_markup=main_menu_keyboard()
         )
         return
@@ -250,11 +223,11 @@ async def confirm_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE)
     result = t.get("result", 0)
     direction = t.get("direction", "Long")
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     c = conn.cursor()
     c.execute("""
-        INSERT INTO trades (user_id, date, pair, direction, entry, exit, lot, result, comment)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO trades (user_id, date, pair, direction, entry, exit_price, lot, result, comment)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (uid, trade_date, t.get("pair",""), direction,
           t.get("entry", 0), t.get("exit", 0), t.get("lot", 0), result, "📸 MT5"))
     conn.commit()
