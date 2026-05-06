@@ -94,18 +94,31 @@ def delete_trade(trade_id, user_id):
 async def analyze_mt5_screenshot(image_bytes: bytes) -> dict | None:
     if not GEMINI_API_KEY:
         return None
-    b64 = __import__("base64").standard_b64encode(image_bytes).decode("utf-8")
-    prompt = (
-        "This is a MetaTrader 5 trade screenshot. "
-        "Return ONLY a JSON object with these fields: "
-        "pair, direction (Long or Short), lot, entry, exit, result, date (YYYY-MM-DD). "
-        "Rules: sell=Short buy=Long. result is always a number. No extra text."
-    )
+    import base64, json, re
+    b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+    prompt = """Look at this MetaTrader 5 screenshot and extract trade info.
+The image shows a trade like: SYMBOL direction lot_size  result
+                               entry_price -> exit_price  date time
+
+Return ONLY this JSON (no markdown, no extra text):
+{"pair":"GBPUSD","direction":"Long","lot":1.4,"entry":1.35005,"exit":1.35178929,"result":243.50,"date":"2026-04-30"}
+
+Rules:
+- pair: the trading symbol (e.g. GBPUSD, XAUUSD)
+- direction: buy/long = "Long", sell/short = "Short"  
+- lot: the position size number
+- entry: first price shown
+- exit: second price shown (after arrow)
+- result: the number shown on the right (always positive float)
+- date: convert from YYYY.MM.DD format to YYYY-MM-DD
+Return ONLY the JSON object, nothing else."""
+
     payload = {
         "contents": [{"parts": [
             {"inline_data": {"mime_type": "image/png", "data": b64}},
             {"text": prompt}
-        ]}]
+        ]}],
+        "generationConfig": {"temperature": 0, "maxOutputTokens": 200}
     }
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -115,9 +128,14 @@ async def analyze_mt5_screenshot(image_bytes: bytes) -> dict | None:
                 json=payload
             )
         data = resp.json()
+        print(f"Gemini raw response: {data}")
         text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        text = text.replace("```json", "").replace("```", "").strip()
-        return __import__("json").loads(text)
+        # Try to extract JSON even if there's extra text
+        text = re.sub(r"```json|```", "", text).strip()
+        match = re.search(r"\{.*?\}", text, re.DOTALL)
+        if match:
+            text = match.group(0)
+        return json.loads(text)
     except Exception as e:
         print(f"Gemini Vision error: {e}")
         return None
