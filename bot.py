@@ -638,7 +638,7 @@ def main():
     app.add_handler(MessageHandler(filters.Regex(r"^/delete_\d+$"), delete_trade_cmd))
 
     print("Бот запущен...")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
