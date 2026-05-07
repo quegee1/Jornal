@@ -181,12 +181,13 @@ async def skip_chart(update,context):
 
 async def _finalize(src,context,is_msg=True):
     d=context.user_data
-    if hasattr(src, 'message'):
-        uid=src.from_user.id  # callback query
-    elif hasattr(src, 'from_user') and src.from_user:
-        uid=src.from_user.id  # message
+    # src can be Update, CallbackQuery, or Message
+    if hasattr(src, 'effective_user'):
+        uid=src.effective_user.id  # Update object
+    elif hasattr(src, 'from_user'):
+        uid=src.from_user.id  # CallbackQuery or Message
     else:
-        uid=src.effective_user.id
+        uid=src.message.from_user.id
     flow=d.get("flow","mt5")
     if flow=="mt5":
         t=d.get("mt5",{})
