@@ -451,6 +451,9 @@ async def delete_cmd(update,context):
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────
 
+async def noop_cb(update,context):
+    await update.callback_query.answer()
+
 def main():
     init_db()
     app=Application.builder().token(TOKEN).build()
@@ -485,7 +488,7 @@ def main():
     app.add_handler(CallbackQueryHandler(show_day,pattern="^day_"))
     app.add_handler(CallbackQueryHandler(show_chart,pattern="^chart_"))
     app.add_handler(CallbackQueryHandler(show_history,pattern="^history$"))
-    app.add_handler(CallbackQueryHandler(lambda u,c:None,pattern="^noop$"))
+    app.add_handler(CallbackQueryHandler(noop_cb,pattern="^noop$"))
     app.add_handler(MessageHandler(filters.PHOTO,handle_photo))
     app.add_handler(MessageHandler(filters.TEXT&~filters.COMMAND,mt5_text))
     app.add_handler(MessageHandler(filters.Regex(r"^/delete_\d+$"),delete_cmd))
