@@ -391,7 +391,9 @@ async def render_cal(q,context):
 
 async def cal_nav(update,context):
     q=update.callback_query; await q.answer()
-    _,y,m=q.data.split("_"); context.user_data["cy"]=int(y); context.user_data["cm"]=int(m)
+    parts=q.data.split("_")  # cal_2026_5 -> ['cal','2026','5']
+    y=int(parts[1]); m=int(parts[2])
+    context.user_data["cy"]=y; context.user_data["cm"]=m
     await render_cal(q,context)
 
 async def show_day(update,context):
@@ -445,9 +447,16 @@ async def show_history(update,context):
 async def delete_cmd(update,context):
     uid=update.effective_user.id
     try:
-        delete_trade_db(int(update.message.text.split("_")[1]),uid)
-        await update.message.reply_text("✅ Удалено.",reply_markup=main_kb())
-    except: await update.message.reply_text("❌ Формат: /delete_5")
+        args=context.args
+        if args:
+            tid=int(args[0])
+        else:
+            tid=int(update.message.text.replace("/delete","").replace("_","").strip())
+        delete_trade_db(tid,uid)
+        await update.message.reply_text(f"✅ Сделка #{tid} удалена.",reply_markup=main_kb())
+    except Exception as e:
+        print(f"Delete error: {e}")
+        await update.message.reply_text("❌ Формат: /delete 5 или /delete_5")
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────
 
@@ -491,7 +500,15 @@ def main():
     app.add_handler(CallbackQueryHandler(noop_cb,pattern="^noop$"))
     app.add_handler(MessageHandler(filters.PHOTO,handle_photo))
     app.add_handler(MessageHandler(filters.TEXT&~filters.COMMAND,mt5_text))
-    app.add_handler(MessageHandler(filters.Regex(r"^/delete_\d+$"),delete_cmd))
+    app.add_handler(CommandHandler("delete",delete_cmd))
+    app.add_handler(MessageHandler(filters.Regex(r"^/delete[_\s]\d+$"),delete_cmd))
+    async def error_handler(update, context):
+        print(f"Error: {context.error}")
+        try:
+            if update and update.callback_query:
+                await update.callback_query.answer("⚠️ Ошибка, попробуй снова", show_alert=False)
+        except: pass
+    app.add_error_handler(error_handler)
     print("Бот запущен v9...")
     app.run_polling(drop_pending_updates=True,allowed_updates=Update.ALL_TYPES)
 
