@@ -84,7 +84,7 @@ buy/long=Long sell/short=Short. result=positive float. date YYYY-MM-DD. ONLY JSO
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}",
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key={GEMINI_API_KEY}",
                 headers={"content-type":"application/json"},
                 json={"contents":[{"parts":[{"inline_data":{"mime_type":"image/png","data":b64}},{"text":prompt}]}],"generationConfig":{"temperature":0,"maxOutputTokens":200}}
             )
