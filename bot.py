@@ -509,20 +509,8 @@ def main():
                 await update.callback_query.answer("⚠️ Ошибка, попробуй снова", show_alert=False)
         except: pass
     app.add_error_handler(error_handler)
-    PORT = int(os.getenv("PORT", 8443))
-    WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
-    
-    if WEBHOOK_URL:
-        print(f"Бот запущен v9 (webhook)...")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            webhook_url=WEBHOOK_URL,
-            drop_pending_updates=True,
-        )
-    else:
-        print("Бот запущен v9 (polling)...")
-        app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    print("Бот запущен v9...")
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 if __name__=="__main__":
     main()
