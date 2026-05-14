@@ -12,7 +12,14 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
 
-TOKEN = os.getenv("BOT_TOKEN", "8615039614:AAHE9gpAoX5uOgPCbfob9pepmKsw1rQjIIo")
+TOKEN = os.getenv("BOT_TOKEN", "")
+ALLOWED_USERS = os.getenv("ALLOWED_USERS", "")  # comma-separated user IDs
+
+def is_allowed(user_id: int) -> bool:
+    if not ALLOWED_USERS:
+        return True  # if not set, allow everyone
+    allowed = [int(x.strip()) for x in ALLOWED_USERS.split(",") if x.strip()]
+    return user_id in allowed
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
@@ -112,6 +119,9 @@ def sess_kb():
     ])
 
 async def start(update,context):
+    if not is_allowed(update.effective_user.id):
+        await update.message.reply_text("⛔️ Доступ запрещён.")
+        return
     await update.message.reply_text("👋 *Торговый журнал v2*\n\n📸 Скинь скрин MT5 — всё заполнится само\n✏️ Или добавь вручную\n\n🟢/🔴 Календарь | 📐 RR | 🕐 Сессии | 🖼 Графики",parse_mode="Markdown",reply_markup=main_kb())
 
 async def menu_cb(update,context):
@@ -124,6 +134,8 @@ async def screenshot_prompt(update,context):
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад",callback_data="menu")]]))
 
 async def handle_photo(update,context):
+    if not is_allowed(update.effective_user.id):
+        return
     if context.user_data.get("awaiting_chart"):
         context.user_data["chart_file_id"]=update.message.photo[-1].file_id
         context.user_data.pop("awaiting_chart")
@@ -222,7 +234,10 @@ async def _finalize(src,context,is_msg=True):
 # ─── MANUAL CONV ─────────────────────────────────────────────────────────────
 
 async def add_start(update,context):
-    q=update.callback_query; await q.answer(); context.user_data.clear()
+    q=update.callback_query; await q.answer()
+    if not is_allowed(q.from_user.id):
+        await q.edit_message_text("⛔️ Доступ запрещён."); return
+    context.user_data.clear()
     pairs=["EUR/USD","GBP/USD","USD/JPY","XAU/USD","NAS100","GBP/JPY","Другая"]
     kb=[[InlineKeyboardButton(p,callback_data=f"pair_{p}")] for p in pairs]
     kb.append([InlineKeyboardButton("◀️ Назад",callback_data="menu")])
