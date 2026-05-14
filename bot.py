@@ -13,25 +13,6 @@ from telegram.ext import (
 )
 
 TOKEN = os.getenv("BOT_TOKEN", "")
-BOT_PASSWORD = os.getenv("BOT_PASSWORD", "")  # set a password in Railway vars
-
-def is_allowed(user_id: int) -> bool:
-    """Check if user is in the approved list in DB."""
-    if not BOT_PASSWORD:
-        return True
-    try:
-        conn = get_conn(); c = conn.cursor()
-        c.execute("SELECT 1 FROM approved_users WHERE user_id=%s", (user_id,))
-        result = c.fetchone(); conn.close()
-        return result is not None
-    except: return False
-
-def approve_user(user_id: int):
-    try:
-        conn = get_conn(); c = conn.cursor()
-        c.execute("INSERT INTO approved_users (user_id) VALUES (%s) ON CONFLICT DO NOTHING", (user_id,))
-        conn.commit(); conn.close()
-    except: pass
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
@@ -151,8 +132,6 @@ async def screenshot_prompt(update,context):
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад",callback_data="menu")]]))
 
 async def handle_photo(update,context):
-    if not is_allowed(update.effective_user.id):
-        return
     if context.user_data.get("awaiting_chart"):
         context.user_data["chart_file_id"]=update.message.photo[-1].file_id
         context.user_data.pop("awaiting_chart")
