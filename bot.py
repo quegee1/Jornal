@@ -13,13 +13,26 @@ from telegram.ext import (
 )
 
 TOKEN = os.getenv("BOT_TOKEN", "")
-ALLOWED_USERS = os.getenv("ALLOWED_USERS", "")  # comma-separated user IDs
+BOT_PASSWORD = os.getenv("BOT_PASSWORD", "")  # set a password in Railway vars
 
 def is_allowed(user_id: int) -> bool:
-    if not ALLOWED_USERS:
-        return True  # if not set, allow everyone
-    allowed = [int(x.strip()) for x in ALLOWED_USERS.split(",") if x.strip()]
-    return user_id in allowed
+    """Check if user is in the approved list in DB."""
+    if not BOT_PASSWORD:
+        return True
+    try:
+        conn = get_conn(); c = conn.cursor()
+        c.execute("SELECT 1 FROM approved_users WHERE user_id=%s", (user_id,))
+        result = c.fetchone(); conn.close()
+        return result is not None
+    except: return False
+
+def approve_user(user_id: int):
+    try:
+        conn = get_conn(); c = conn.cursor()
+        c.execute("INSERT INTO approved_users (user_id) VALUES (%s) ON CONFLICT DO NOTHING", (user_id,))
+        c.execute("CREATE TABLE IF NOT EXISTS approved_users (user_id BIGINT PRIMARY KEY)")
+    conn.commit(); conn.close()
+    except: pass
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
@@ -119,8 +132,13 @@ def sess_kb():
     ])
 
 async def start(update,context):
-    if not is_allowed(update.effective_user.id):
-        await update.message.reply_text("⛔️ Доступ запрещён.")
+    uid = update.effective_user.id
+    if BOT_PASSWORD and not is_allowed(uid):
+        await update.message.reply_text(
+            "🔐 *Введи пароль для доступа к боту:*",
+            parse_mode="Markdown"
+        )
+        context.user_data["awaiting_password"] = True
         return
     await update.message.reply_text("👋 *Торговый журнал v2*\n\n📸 Скинь скрин MT5 — всё заполнится само\n✏️ Или добавь вручную\n\n🟢/🔴 Календарь | 📐 RR | 🕐 Сессии | 🖼 Графики",parse_mode="Markdown",reply_markup=main_kb())
 
@@ -173,6 +191,25 @@ async def mt5_skip_sl(update,context):
     await q.edit_message_text("🕐 Торговая сессия:",parse_mode="Markdown",reply_markup=sess_kb())
 
 async def mt5_text(update,context):
+    # Handle password input
+    if context.user_data.get("awaiting_password"):
+        if update.message.text.strip() == BOT_PASSWORD:
+            approve_user(update.effective_user.id)
+            context.user_data.pop("awaiting_password")
+            await update.message.reply_text(
+                "✅ *Доступ открыт!*
+
+Добро пожаловать в торговый журнал.",
+                parse_mode="Markdown",
+                reply_markup=main_kb()
+            )
+        else:
+            await update.message.reply_text("❌ Неверный пароль. Попробуй ещё раз:")
+        return
+    # Block unauthorized users
+    if BOT_PASSWORD and not is_allowed(update.effective_user.id):
+        await update.message.reply_text("🔐 Введи пароль: /start")
+        return
     if context.user_data.get("mt5_step")=="sl":
         try: context.user_data["sl"]=float(update.message.text.replace(",","."))
         except: await update.message.reply_text("❌ Введи число"); return
