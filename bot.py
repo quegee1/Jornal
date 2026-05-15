@@ -169,19 +169,7 @@ async def mt5_skip_sl(update,context):
     await q.edit_message_text("🕐 Торговая сессия:",parse_mode="Markdown",reply_markup=sess_kb())
 
 async def mt5_text(update,context):
-    # Handle password input
-    if context.user_data.get("awaiting_password"):
-        if update.message.text.strip() == BOT_PASSWORD:
-            approve_user(update.effective_user.id)
-            context.user_data.pop("awaiting_password")
-            await update.message.reply_text("Доступ открыт! Добро пожаловать.", reply_markup=main_kb())
-        else:
-            await update.message.reply_text("❌ Неверный пароль. Попробуй ещё раз:")
-        return
-    # Block unauthorized users
-    if BOT_PASSWORD and not is_allowed(update.effective_user.id):
-        await update.message.reply_text("🔐 Введи пароль: /start")
-        return
+  
     if context.user_data.get("mt5_step")=="sl":
         try: context.user_data["sl"]=float(update.message.text.replace(",","."))
         except: await update.message.reply_text("❌ Введи число"); return
