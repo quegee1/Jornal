@@ -12,7 +12,7 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
 
-TOKEN = os.getenv("BOT_TOKEN", "")
+TOKEN = os.getenv("BOT_TOKEN", "8615039614:AAHE9gpAoX5uOgPCbfob9pepmKsw1rQjIIo")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
@@ -112,14 +112,6 @@ def sess_kb():
     ])
 
 async def start(update,context):
-    uid = update.effective_user.id
-    if BOT_PASSWORD and not is_allowed(uid):
-        await update.message.reply_text(
-            "🔐 *Введи пароль для доступа к боту:*",
-            parse_mode="Markdown"
-        )
-        context.user_data["awaiting_password"] = True
-        return
     await update.message.reply_text("👋 *Торговый журнал v2*\n\n📸 Скинь скрин MT5 — всё заполнится само\n✏️ Или добавь вручную\n\n🟢/🔴 Календарь | 📐 RR | 🕐 Сессии | 🖼 Графики",parse_mode="Markdown",reply_markup=main_kb())
 
 async def menu_cb(update,context):
@@ -169,7 +161,6 @@ async def mt5_skip_sl(update,context):
     await q.edit_message_text("🕐 Торговая сессия:",parse_mode="Markdown",reply_markup=sess_kb())
 
 async def mt5_text(update,context):
-  
     if context.user_data.get("mt5_step")=="sl":
         try: context.user_data["sl"]=float(update.message.text.replace(",","."))
         except: await update.message.reply_text("❌ Введи число"); return
@@ -231,10 +222,7 @@ async def _finalize(src,context,is_msg=True):
 # ─── MANUAL CONV ─────────────────────────────────────────────────────────────
 
 async def add_start(update,context):
-    q=update.callback_query; await q.answer()
-    if not is_allowed(q.from_user.id):
-        await q.edit_message_text("⛔️ Доступ запрещён."); return
-    context.user_data.clear()
+    q=update.callback_query; await q.answer(); context.user_data.clear()
     pairs=["EUR/USD","GBP/USD","USD/JPY","XAU/USD","NAS100","GBP/JPY","Другая"]
     kb=[[InlineKeyboardButton(p,callback_data=f"pair_{p}")] for p in pairs]
     kb.append([InlineKeyboardButton("◀️ Назад",callback_data="menu")])
